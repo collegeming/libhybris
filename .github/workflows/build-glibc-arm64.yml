@@ -92,7 +92,8 @@ jobs:
 
       - name: Build the android-headers tree directly
         run: |
-          set -euo pipefail
+          set -uo pipefail   # NOT -e: individual misses are reported, the
+                             # assertion at the end decides pass/fail
           # utils/extract-headers.sh copies with `cp -L`, which keeps going
           # after a miss, so a wrong source layout produces a silently empty
           # tree. Build the include tree here instead, from the fetched
