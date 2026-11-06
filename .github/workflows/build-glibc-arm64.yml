@@ -120,6 +120,13 @@ jobs:
       - name: Configure
         run: |
           set -euo pipefail
+          # mali_quirks.c uses NULL without <stddef.h>; newer glibc no longer
+          # pulls it in transitively. One-line fix, kept here so the upstream
+          # tree stays untouched.
+          grep -q '<stddef.h>' hybris/common/mali_quirks.c || \
+            sed -i 's|#include <stdint.h>|#include <stddef.h>\n#include <stdint.h>|' hybris/common/mali_quirks.c
+          head -20 hybris/common/mali_quirks.c
+
           export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cd hybris
           ./autogen.sh
