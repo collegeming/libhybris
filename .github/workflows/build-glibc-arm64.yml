@@ -72,7 +72,8 @@ jobs:
           # include_all holds the real files; include/hardware links into it.
           fetch hardware/libhardware           include/hardware include_all/hardware
           fetch hardware/libhardware_legacy    include/hardware_legacy
-          fetch system/core                    include libcutils/include libsystem/include
+          fetch system/core                    include libcutils/include libsystem/include \
+                                               libsync/include libutils/include libprocessgroup/include
           fetch system/logging                 liblog/include
           fetch system/media                   audio/include/system
           fetch bionic                         libc/include libc/kernel
@@ -201,7 +202,34 @@ jobs:
             echo "ok  hardware_legacy/*.h"
           fi
 
-          # ---- fill any remaining gaps by searching the fetched tree ----
+          # ---- bulk sweep: every include/ dir under the fetched projects ----
+          # Chasing individual headers one CI run at a time is slow and the
+          # AOSP layout shifts between releases. Flatten every `include/<x>`
+          # tree we fetched into $hdr/<x> instead, then let the assertion below
+          # be the only gate.
+          find "$src" -type d -name include -print > /tmp/incdirs.txt 2>/dev/null || true
+          while IFS= read -r inc; do
+            [ -d "$inc" ] || continue
+            for sub in "$inc"/*/; do
+              [ -d "$sub" ] || continue
+              name=$(basename "$sub")
+              case "$name" in
+                # never overlay the two generated headers' home
+                android-config.h|android-version.h) continue ;;
+              esac
+              mkdir -p "$hdr/$name"
+              cp -rL "$sub"/. "$hdr/$name"/ 2>/dev/null || true
+            done
+            # flat headers directly under include/
+            for f in "$inc"/*.h; do
+              [ -f "$f" ] && cp -f "$f" "$hdr"/ 2>/dev/null || true
+            done
+          done < /tmp/incdirs.txt
+          echo "ok  bulk include sweep ($(ls "$hdr" | wc -l) top-level entries)"
+
+          # re-assert the generated pair survived the sweep
+          [ -f "$hdr/android-config.h" ]  || echo "LOST android-config.h"
+          [ -f "$hdr/android-version.h" ] || echo "LOST android-version.h"
           # Rather than hard-coding where each header lives in this AOSP
           # release (it moves between releases), look each one up and place it
           # at the path the source expects.
