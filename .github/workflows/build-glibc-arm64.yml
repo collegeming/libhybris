@@ -52,19 +52,21 @@ jobs:
           root="$RUNNER_TEMP/aosp"
           mkdir -p "$root"
 
-          fetch() {  # fetch <project> <path-in-repo>
-            project=$1; sub=$2
+          fetch() {  # fetch <project> <path-in-repo>...
+            project=$1; shift
             dir="$root/$project"
             git clone -q --depth 1 --filter=blob:none --sparse \
               -b "$ANDROID_TAG" \
               "https://android.googlesource.com/platform/$project" "$dir"
-            ( cd "$dir" && git sparse-checkout set "$sub" )
-            echo "ok: $project/$sub"
+            ( cd "$dir" && git sparse-checkout set "$@" )
+            echo "ok: $project $*"
           }
 
           fetch hardware/libhardware           include/hardware
           fetch hardware/libhardware_legacy    include/hardware_legacy
-          fetch system/core                    include
+          # Modern AOSP moved cutils out of system/core/include, but
+          # utils/extract-headers.sh still looks for it there.
+          fetch system/core                    include libcutils/include
           fetch system/media                   audio/include/system
           fetch bionic                         libc/include libc/kernel
 
@@ -73,7 +75,25 @@ jobs:
           # into a failed step.
           find "$root" -name '*.h' > /tmp/hdr.txt
           echo "header files fetched: $(wc -l < /tmp/hdr.txt)"
-          sed -n '1,15p' /tmp/hdr.txt
+          ls "$root/system/core/libcutils/include/" 2>/dev/null || true
+
+      - name: Normalise the AOSP layout for extract-headers.sh
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/aosp"
+          # extract-headers.sh expects system/core/include/cutils and
+          # .../include/log. AOSP keeps them under libcutils/include and
+          # liblog/include now, so link them into the expected place.
+          inc="$root/system/core/include"
+          mkdir -p "$inc"
+          for pair in "cutils:libcutils" "log:liblog"; do
+            hdr=${pair%%:*}; src=${pair##*:}
+            if [ -d "$root/system/core/$src/include/$hdr" ] && [ ! -e "$inc/$hdr" ]; then
+              ln -s "../../$src/include/$hdr" "$inc/$hdr"
+              echo "linked $hdr -> $src/include/$hdr"
+            fi
+          done
+          ls -la "$inc"
 
       - name: Build the extract-headers input tree
         run: |
@@ -85,6 +105,9 @@ jobs:
           cp -r "$RUNNER_TEMP/aosp/hardware/libhardware"          "$aosp/hardware/"
           cp -r "$RUNNER_TEMP/aosp/hardware/libhardware_legacy"   "$aosp/hardware/"
           cp -r "$RUNNER_TEMP/aosp/system/core/include"           "$aosp/system/core/"
+          # the two moved header trees, now linked under include/
+          cp -rL "$RUNNER_TEMP/aosp/system/core/include/cutils"    "$aosp/system/core/include/" 2>/dev/null || true
+          cp -rL "$RUNNER_TEMP/aosp/system/core/include/log"       "$aosp/system/core/include/" 2>/dev/null || true
           mkdir -p "$aosp/system/media"
           cp -r "$RUNNER_TEMP/aosp/system/media/audio"            "$aosp/system/media/"
           cp -r "$RUNNER_TEMP/aosp/bionic/libc/include"           "$aosp/bionic/libc/"
