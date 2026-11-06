@@ -171,28 +171,32 @@ jobs:
           # release (it moves between releases), look each one up and place it
           # at the path the source expects.
           place() {  # place <header-name> <dest-subdir>
-            name=$1; dest=$2
-            if [ -f "$hdr/$dest/$name" ]; then return 0; fi
-            found=$(find "$src" -name "$name" -path "*/$dest/*" 2>/dev/null > /tmp/f.txt; sed -n '1p' /tmp/f.txt)
-            [ -n "$found" ] || found=$(find "$src" -name "$name" 2>/dev/null > /tmp/f2.txt; sed -n '1p' /tmp/f2.txt)
+            name="$1"; dest="$2"
+            if [ -f "$hdr/$dest/$name" ]; then
+              echo "have $dest/$name"
+              return 0
+            fi
+            found=""
+            found=$(find "$src" -type f -name "$name" 2>/dev/null | sed -n '1p')
             if [ -n "$found" ]; then
               mkdir -p "$hdr/$dest"
-              cp "$found" "$hdr/$dest/"
-              echo "placed $dest/$name  <- ${found#$src/}"
+              cp "$found" "$hdr/$dest/$name"
+              echo "placed $dest/$name"
             else
-              echo "MISSING $dest/$name  (not found anywhere)"
-              return 1
+              echo "MISSING $dest/$name (not found)"
             fi
+            return 0
           }
 
-          for h in window.h graphics.h hardware_buffer.h native_handle.h; do
-            case $h in
-              window.h)         place window.h system || true ;;
-              graphics.h)       place graphics.h system || true ;;
-              hardware_buffer.h) place hardware_buffer.h android || true ;;
-              native_handle.h)  place native_handle.h cutils || true ;;
-            esac
-          done
+          place window.h          system
+          place graphics.h        system
+          place hardware_buffer.h android
+          place native_handle.h   cutils
+          place hardware.h        hardware
+          place gralloc.h         hardware
+          place fb.h              hardware
+          place dlext.h           android
+          place log.h             cutils
 
           echo "---- assert the headers the build needs ----"
           for f in android-config.h android-version.h \
