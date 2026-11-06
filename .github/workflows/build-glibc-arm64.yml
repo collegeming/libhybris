@@ -165,10 +165,32 @@ jobs:
             copy hardware_legacy "$src/hardware/libhardware_legacy/include/hardware_legacy"
           fi
 
-          echo "---- where do the missing ones live? ----"
-          for want in graphics.h window.h hardware_buffer.h native_handle.h; do
-            find "$src" -name "$want" 2>/dev/null > /tmp/w.txt || true
-            echo "  $want: $(tr '\n' ' ' < /tmp/w.txt)"
+          # ---- fill any remaining gaps by searching the fetched tree ----
+          # Rather than hard-coding where each header lives in this AOSP
+          # release (it moves between releases), look each one up and place it
+          # at the path the source expects.
+          place() {  # place <header-name> <dest-subdir>
+            name=$1; dest=$2
+            if [ -f "$hdr/$dest/$name" ]; then return 0; fi
+            found=$(find "$src" -name "$name" -path "*/$dest/*" 2>/dev/null > /tmp/f.txt; sed -n '1p' /tmp/f.txt)
+            [ -n "$found" ] || found=$(find "$src" -name "$name" 2>/dev/null > /tmp/f2.txt; sed -n '1p' /tmp/f2.txt)
+            if [ -n "$found" ]; then
+              mkdir -p "$hdr/$dest"
+              cp "$found" "$hdr/$dest/"
+              echo "placed $dest/$name  <- ${found#$src/}"
+            else
+              echo "MISSING $dest/$name  (not found anywhere)"
+              return 1
+            fi
+          }
+
+          for h in window.h graphics.h hardware_buffer.h native_handle.h; do
+            case $h in
+              window.h)         place window.h system || true ;;
+              graphics.h)       place graphics.h system || true ;;
+              hardware_buffer.h) place hardware_buffer.h android || true ;;
+              native_handle.h)  place native_handle.h cutils || true ;;
+            esac
           done
 
           echo "---- assert the headers the build needs ----"
