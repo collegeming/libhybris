@@ -145,9 +145,6 @@ jobs:
             mkdir -p "$hdr/hardware"
             cp -r "$src/hardware/libhardware/include/hardware"/. "$hdr/hardware"/
             echo "ok  hardware/*.h  ($(ls "$hdr/hardware" | wc -l) files)"
-            echo "---- what is in hardware/ ----"
-            ls "$hdr/hardware" > /tmp/hw.txt
-            sed -n '1,45p' /tmp/hw.txt
           fi
           copy cutils         "$src/system/core/libcutils/include/cutils"
           # liblog lives in its own project (platform/system/logging).
@@ -207,17 +204,26 @@ jobs:
           place native_handle.h   cutils
 
           echo "---- assert the headers the build needs ----"
+          missing=0
           for f in android-config.h android-version.h \
                    hardware/hardware.h hardware/gralloc.h hardware/fb.h \
                    cutils/native_handle.h cutils/log.h \
                    system/graphics.h system/window.h \
                    android/hardware_buffer.h; do
-            if [ -f "$hdr/$f" ]; then echo "  yes $f"; else echo "  NO  $f"; missing=1; fi
+            if [ -f "$hdr/$f" ]; then
+              echo "  yes $f"
+            else
+              echo "  NO  $f"
+              missing=1
+            fi
           done
-          echo "---- full top-level tree ----"
-          ls "$hdr"          [ "${missing:-0}" = 0 ]
+          echo "missing=$missing"
           echo "---- header tree ----"
           find "$hdr" -maxdepth 1 -mindepth 1 | sort
+          if [ "$missing" != 0 ]; then
+            echo "required headers are missing" >&2
+            exit 1
+          fi
 
       - name: Extract headers with the upstream script
         if: false   # replaced by the step above
