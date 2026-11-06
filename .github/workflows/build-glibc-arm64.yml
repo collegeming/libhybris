@@ -1,439 +1,102 @@
 name: Build libhybris (glibc aarch64) for XRing O3
 
-# Self-contained build of taowen/libhybris for a glibc aarch64 guest.
-#
-# Upstream's `ARLinux component` workflow needs a pinned request object from
-# build.ps1 plus the whole arlinux-rootfs framework. This one builds the same
-# libraries directly so the .so files can be dropped into the Droidspaces Arch
-# container and tested on the device.
-#
-# Android headers: the AOSP `manifest` repository holds only manifest XML, not
-# source. Each project lives in its own git repository, so the four needed ones
-# are cloned directly with a partial/blobless clone and sparse checkout.
-
 on:
   workflow_dispatch:
-    inputs:
-      android_tag:
-        description: AOSP tag/branch for the header projects
-        required: false
-        default: android17-release
-      android_version:
-        description: Version written into android-version.h (MAJOR.MINOR.PATCH)
-        required: false
-        default: '17.0.0'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    # glibc aarch64 target, built natively on an arm64 runner.
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
-    env:
-      ANDROID_TAG: ${{ inputs.android_tag }}
-      ANDROID_VERSION: ${{ inputs.android_version }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout this fork
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf automake libtool pkg-config \
             libwayland-dev wayland-protocols libx11-dev libxcb1-dev libx11-xcb-dev \
             python3 git zstd
 
-      - name: Fetch the Android headers
+      - name: Fetch pinned upstream headers
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/aosp"
-          mkdir -p "$root"
+          headers=$(HYBRIS_DEPS_DIR="$RUNNER_TEMP/deps" bash tools/fetch-android-headers.sh)
+          echo "ANDROID_HEADERS=$headers" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch vulkan-sdk-1.4.328.1 \
+            https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          git -C "$RUNNER_TEMP/vulkan-headers" rev-parse HEAD > "$RUNNER_TEMP/vulkan-headers-revision.txt"
 
-          fetch() {  # fetch <project> <path-in-repo>...
-            project=$1; shift
-            dir="$root/$project"
-            git clone -q --depth 1 --filter=blob:none --sparse \
-              -b "$ANDROID_TAG" \
-              "https://android.googlesource.com/platform/$project" "$dir"
-            ( cd "$dir" && git sparse-checkout set "$@" )
-            echo "ok: $project $*"
-          }
-
-          # NOTE on <system/window.h>: it is NOT under system/core in modern
-          # AOSP -- it moved to frameworks/native (libs/nativewindow). Same for
-          # <android/hardware_buffer.h> (frameworks/native/libs/nativewindow
-          # via .../include/android). The AOSP projects are named by their
-          # top-level path, so frameworks/native is fetched as a whole and
-          # sparse-checked to the include dirs the build reads.
-
-          # include_all holds the real files; include/hardware links into it.
-          fetch hardware/libhardware           include/hardware include_all/hardware
-          fetch hardware/libhardware_legacy    include/hardware_legacy
-          fetch system/core                    include libcutils/include libsystem/include \
-                                               libsync/include libutils/include libprocessgroup/include
-          fetch system/logging                 liblog/include
-          fetch system/media                   audio/include/system
-          fetch bionic                         libc/include libc/kernel
-          # frameworks/native carries system/window.h, android/hardware_buffer.h
-          # and ui/*.h; sparse to just the header trees.
-          fetch frameworks/native              libs/nativewindow/include \
-                                               libs/nativebase/include \
-                                               libs/ui/include \
-                                               libs/arect/include 2>/dev/null \
-            || echo "frameworks/native fetch failed (headers may be missing)"
-
-          echo "---- what we have ----"
-          # NOTE: no `find | head` here; pipefail turns the resulting SIGPIPE
-          # into a failed step.
-          find "$root" -name '*.h' > /tmp/hdr.txt
-          echo "header files fetched: $(wc -l < /tmp/hdr.txt)"
-          ls "$root/system/core/libcutils/include/" 2>/dev/null || true
-
-      - name: Build the android-headers tree directly
-        run: |
-          set -uo pipefail   # NOT -e: individual misses are reported, the
-                             # assertion at the end decides pass/fail
-          # utils/extract-headers.sh copies with `cp -L`, which keeps going
-          # after a miss, so a wrong source layout produces a silently empty
-          # tree. Build the include tree here instead, from the fetched
-          # projects, and assert on the headers the build actually needs.
-          src="$RUNNER_TEMP/aosp"
-          hdr="$RUNNER_TEMP/android-headers"
-          mkdir -p "$hdr"
-
-          # --- the two generated headers extract-headers.sh would create ---
-          v=${ANDROID_VERSION%%.*}
-          rest=${ANDROID_VERSION#*.}
-          mi=${rest%%.*}
-          pa=${rest#*.}
-          {
-            echo '#ifndef ANDROID_VERSION_H_'
-            echo '#define ANDROID_VERSION_H_'
-            echo "#define ANDROID_VERSION_MAJOR $v"
-            echo "#define ANDROID_VERSION_MINOR $mi"
-            echo "#define ANDROID_VERSION_PATCH $pa"
-            echo '#define ANDROID_VERSION_PATCH2 0'
-            echo '#define ANDROID_VERSION_PATCH3 0'
-            echo '#endif'
-          } > "$hdr/android-version.h"
-          {
-            echo '#ifndef HYBRIS_CONFIG_H_'
-            echo '#define HYBRIS_CONFIG_H_'
-            echo '#include <android-version.h>'
-            echo '/* CONFIG GOES HERE */'
-            echo '#endif'
-          } > "$hdr/android-config.h"
-
-          # --- copy the trees the sources include ---
-          # copy <dest-subdir> <src-dir>: contents of src-dir land IN dest-subdir
-          copy() {  # copy <dest-subdir> <src-dir> [optional]
-            if [ -d "$2" ]; then
-              mkdir -p "$hdr/$1"
-              cp -r "$2"/. "$hdr/$1"/
-              echo "ok  $1  <- $2"
-            else
-              echo "MISSING $2 (${3:-required})"
-              [ "${3:-}" = optional ] || true
-            fi
-            return 0
-          }
-
-          # <hardware/*.h>: include/hardware/ holds the headers themselves, so
-          # they belong in $hdr/hardware/, not $hdr/hardware/hardware/.
-          # AOSP's libhardware/include/hardware is mostly symlinks into
-          # include_all/ (which sparse-checkout does not fetch), so copy with
-          # -L to dereference and pull the real files in.
-          if [ -d "$src/hardware/libhardware/include/hardware" ]; then
-            mkdir -p "$hdr/hardware"
-            cp -rL "$src/hardware/libhardware/include/hardware"/. "$hdr/hardware"/ 2>/dev/null
-            echo "ok  hardware/*.h  ($(ls "$hdr/hardware" | wc -l) entries)"
-          fi
-          copy cutils         "$src/system/core/libcutils/include/cutils"
-          # liblog lives in its own project (platform/system/logging).
-          copy log            "$src/system/logging/liblog/include/log" optional
-          # <system/*.h> (graphics.h, window.h) moved around between releases;
-          # try the known spots and let the assertion below be the judge.
-          for cand in \
-              "$src/system/core/include/system" \
-              "$src/system/core/libsystem/include/system" \
-              "$src/system/core/libcutils/include/system"; do
-            if [ -d "$cand" ]; then copy system "$cand"; break; fi
-          done
-          copy android        "$src/system/core/include/android" optional
-          copy utils          "$src/system/core/include/utils" optional
-
-          # frameworks/native provides the rest of the public NDK surface
-          copy ui             "$src/frameworks/native/libs/ui/include/ui"          optional
-          # android/ exists in two places; the nativewindow copy is the newer
-          # one (rect.h, data_space.h, hardware_buffer.h all live together).
-          # Copy system/core's first, then nativewindow's on top, so the set is
-          # consistent with the hardware_buffer.h that will be used.
-          copy android        "$src/system/core/include/android" optional
-          copy android        "$src/frameworks/native/libs/nativewindow/include/android" optional
-          copy system         "$src/frameworks/native/libs/nativewindow/include/system"  optional
-          # arect.h / nativebase are pulled in by ui headers.
-          # NOTE: frameworks/native's vndk/hardware_buffer.h is NOT copied: it
-          # defines AHardwareBuffer too, and collides with the
-          # android/hardware_buffer.h already placed above. system/window.h's
-          # `#include <vndk/hardware_buffer.h>` is satisfied by pointing that
-          # name at the android/ copy instead.
-          for t in nativebase arect; do
-            d="$src/frameworks/native/libs/$t/include"
-            [ -d "$d" ] && { cp -rL "$d"/. "$hdr"/; echo "ok  $t <- $d"; }
-          done
-          if [ -f "$hdr/android/hardware_buffer.h" ]; then
-            mkdir -p "$hdr/vndk"
-            cp "$hdr/android/hardware_buffer.h" "$hdr/vndk/hardware_buffer.h"
-            echo "ok  vndk/hardware_buffer.h (from android/)"
-            echo "-- deps of hardware_buffer.h --"
-            grep -n '#include' "$hdr/android/hardware_buffer.h" > /tmp/hbi.txt 2>/dev/null || true
-            sed -n '1,12p' /tmp/hbi.txt
-            for dep in android/rect.h android/data_space.h; do
-              [ -f "$hdr/$dep" ] && echo "  have $dep" || echo "  MISS $dep"
-            done
-          fi
-          # hardware_legacy/vibrator.h is optional for the graphics path
-          if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
-            mkdir -p "$hdr/hardware_legacy"
-            cp -r "$src/hardware/libhardware_legacy/include/hardware_legacy"/. "$hdr/hardware_legacy"/
-            echo "ok  hardware_legacy/*.h"
-          fi
-
-          # ---- bulk sweep: every include/ dir under the fetched projects ----
-          # Chasing individual headers one CI run at a time is slow and the
-          # AOSP layout shifts between releases. Flatten every `include/<x>`
-          # tree we fetched into $hdr/<x> instead, then let the assertion below
-          # be the only gate.
-          find "$src" -type d -name include -print > /tmp/incdirs.txt 2>/dev/null || true
-          while IFS= read -r inc; do
-            [ -d "$inc" ] || continue
-            for sub in "$inc"/*/; do
-              [ -d "$sub" ] || continue
-              name=$(basename "$sub")
-              case "$name" in
-                # never overlay the two generated headers' home
-                android-config.h|android-version.h) continue ;;
-              esac
-              mkdir -p "$hdr/$name"
-              cp -rL "$sub"/. "$hdr/$name"/ 2>/dev/null || true
-            done
-            # flat headers directly under include/
-            for f in "$inc"/*.h; do
-              [ -f "$f" ] && cp -f "$f" "$hdr"/ 2>/dev/null || true
-            done
-          done < /tmp/incdirs.txt
-          echo "ok  bulk include sweep ($(ls "$hdr" | wc -l) top-level entries)"
-
-          # Rather than hard-coding where each header lives in this AOSP
-          # release (it moves between releases), look each one up and place it
-          # at the path the source expects.
-          place() {  # place <header-name> <dest-subdir>
-            name="$1"; dest="$2"
-            if [ -f "$hdr/$dest/$name" ]; then
-              echo "have $dest/$name"
-              return 0
-            fi
-            found=""
-            found=$(find "$src" -type f -name "$name" 2>/dev/null | sed -n '1p')
-            if [ -n "$found" ]; then
-              mkdir -p "$hdr/$dest"
-              cp "$found" "$hdr/$dest/$name"
-              echo "placed $dest/$name"
-            else
-              echo "MISSING $dest/$name (not found)"
-            fi
-            return 0
-          }
-
-          place window.h          system
-          place graphics.h        system
-          place hardware_buffer.h android
-          place native_handle.h   cutils
-          # <system/window.h> in AOSP 17 chains into apex/ and vndk/; copy both
-          # header dirs and also drop the flat <vndk/window.h>.
-          for d in apex vndk; do
-            if [ -d "$src/frameworks/native/libs/nativewindow/include/$d" ]; then
-              mkdir -p "$hdr/$d"
-              cp -rL "$src/frameworks/native/libs/nativewindow/include/$d"/. "$hdr/$d"/
-              echo "ok  $d/*.h ($(ls "$hdr/$d" | wc -l))"
-            else
-              echo "MISSING dir $d"
-            fi
-          done
-          # any header the chain still asks for, found by name
-          for want in window.h; do
-            for d in apex vndk; do
-              if [ ! -f "$hdr/$d/$want" ]; then
-                f=$(find "$src" -type f -path "*/$d/$want" 2>/dev/null | sed -n '1p')
-                if [ -n "$f" ]; then
-                  mkdir -p "$hdr/$d"; cp "$f" "$hdr/$d/$want"; echo "placed $d/$want"
-                fi
-              fi
-            done
-          done
-
-          echo "---- assert the headers the build needs ----"
-          echo "hdr=$hdr"
-          ls -d "$hdr"/*/ 2>/dev/null | sed -n '1,20p'
-          echo "-- direct probe --"
-          ls -l "$hdr/hardware/hardware.h" 2>&1 | sed -n '1,2p'
-          # ---- regenerate the two synthetic headers last ----
-          # The bulk sweep above can overwrite them from an AOSP copy that is
-          # not meant to be used as android-config.h. Values are derived from
-          # ANDROID_VERSION again here so no stale shell variable is relied on.
-          av="${ANDROID_VERSION:-17.0.0}"
-          a1="${av%%.*}"
-          a23="${av#*.}"
-          a2="${a23%%.*}"
-          a3="${a23#*.}"
-          {
-            echo '#ifndef ANDROID_VERSION_H_'
-            echo '#define ANDROID_VERSION_H_'
-            echo "#define ANDROID_VERSION_MAJOR ${a1:-17}"
-            echo "#define ANDROID_VERSION_MINOR ${a2:-0}"
-            echo "#define ANDROID_VERSION_PATCH ${a3:-0}"
-            echo '#define ANDROID_VERSION_PATCH2 0'
-            echo '#define ANDROID_VERSION_PATCH3 0'
-            echo '#endif'
-          } > "$hdr/android-version.h"
-          {
-            echo '#ifndef HYBRIS_CONFIG_H_'
-            echo '#define HYBRIS_CONFIG_H_'
-            echo '#include <android-version.h>'
-            echo '/* CONFIG GOES HERE */'
-            echo '#endif'
-          } > "$hdr/android-config.h"
-          echo "regenerated: $(ls -l "$hdr/android-config.h" | wc -l) file, head:"
-          sed -n '1,4p' "$hdr/android-config.h"
-          sed -n '1,5p' "$hdr/android-version.h"
-
-          missing=0
-          for f in android-config.h android-version.h \
-                   hardware/hardware.h hardware/gralloc.h hardware/fb.h \
-                   cutils/native_handle.h cutils/log.h \
-                   system/graphics.h system/window.h \
-                   android/hardware_buffer.h; do
-            if [ -f "$hdr/$f" ]; then
-              echo "  yes $f"
-            else
-              echo "  NO  $f"
-              missing=1
-            fi
-          done
-          echo "missing=$missing"
-          echo "---- header tree ----"
-          find "$hdr" -maxdepth 1 -mindepth 1 | sort
-          if [ "$missing" != 0 ]; then
-            echo "required headers are missing" >&2
-            exit 1
-          fi
-
-      - name: Extract headers with the upstream script
-        if: false   # replaced by the step above
+      - name: Configure upstream graphics components
         run: |
           set -euo pipefail
-          sh utils/extract-headers.sh \
-             -v "$ANDROID_VERSION" \
-             "$RUNNER_TEMP/aosp-root" \
-             "$RUNNER_TEMP/android-headers"
-          echo "---- header tree ----"
-          ls "$RUNNER_TEMP/android-headers"
-
-      - name: Install arlinux-wsi-protocols (in tree)
-        run: |
-          set -euo pipefail
-          # configure asks for arlinux-wsi-protocols >= 0.3 when Wayland is on.
-          wsi="$RUNNER_TEMP/wsi"
-          mkdir -p "$wsi/lib/pkgconfig"
-          cp -r arlinux/graphics-protocols "$wsi/share"
-          sed "s|^pkgdatadir=.*|pkgdatadir=$wsi/share|" \
-              arlinux/graphics-protocols/arlinux-wsi-protocols.pc \
-              > "$wsi/lib/pkgconfig/arlinux-wsi-protocols.pc"
-          cat "$wsi/lib/pkgconfig/arlinux-wsi-protocols.pc"
-
-      - name: Configure
-        run: |
-          set -uo pipefail
-          # mali_quirks.c returns NULL in the branch compiled when MALI_QUIRKS is
-          # off, but only pulls in <stdint.h>/<stdlib.h> inside the #if block;
-          # newer glibc no longer provides NULL transitively. Patch that one
-          # file, above the #if, rather than touching global flags (CPPFLAGS
-          # would also hit the .S sources and break the assembler).
-          f=hybris/common/mali_quirks.c
-          if grep -q 'include <stddef.h>' "$f"; then
-            echo "already patched"
-          else
-            sed -i '1a #include <stddef.h>' "$f"
-            echo "patched $f"
-          fi
-
-          # AOSP's public headers use Clang's nullability qualifiers
-          # (_Nullable / _Nonnull), which GCC does not implement. They are
-          # annotations only, so make GCC expand them away.
-          cat > "$RUNNER_TEMP/nullability.h" <<'EOF'
-          #ifndef HYBRIS_NULLABILITY_SHIM_H
-          #define HYBRIS_NULLABILITY_SHIM_H
-          #ifndef __clang__
-          #define _Nullable
-          #define _Nonnull
-          #define _Null_unspecified
-          #endif
-          #endif
-          EOF
-          sed -i 's/^          //' "$RUNNER_TEMP/nullability.h"
-          export CPPFLAGS="-include $RUNNER_TEMP/nullability.h ${CPPFLAGS:-}"
-          echo "CPPFLAGS=$CPPFLAGS"
-
-          export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/arlinux/graphics-protocols"
+          export CPPFLAGS="-I$RUNNER_TEMP/vulkan-headers/include"
+          export LDFLAGS="-Wl,--no-as-needed"
           cd hybris
-          ./autogen.sh
+          NOCONFIGURE=1 ./autogen.sh
           ./configure \
-            --prefix=/usr \
-            --with-android-headers="$RUNNER_TEMP/android-headers" \
+            --prefix=/usr/lib/hybris \
+            --libdir=/usr/lib/hybris \
+            --with-android-headers="$ANDROID_HEADERS" \
+            --enable-arch=arm64 \
             --enable-wayland \
-            --enable-arch=arm64
-          echo "---- configured ----"
-          grep -E 'ANDROID_HEADERS|wayland|arch' config.log > /tmp/cfg.txt 2>/dev/null || true
-          sed -n '1,20p' /tmp/cfg.txt
+            --enable-x11 \
+            --disable-wayland_serverside_buffers \
+            --enable-adreno-quirks \
+            --enable-mali-quirks \
+            --enable-property-cache \
+            --with-default-hybris-ld-library-path=/vendor/lib64/egl:/vendor/lib64/hw:/vendor/lib64:/system/lib64:/system_ext/lib64
+          grep -q '^#define HAVE_VULKAN_VULKAN_H 1' config.h
 
-      - name: Build
+      - name: Build and stage upstream graphics components
         run: |
           set -euo pipefail
-          cd hybris
-          make -j"$(nproc)"
-
-      - name: List built objects
-        run: |
-          set -euo pipefail
-          cd hybris
-          find . -name '*.so' -o -name '*.so.*' | sort
-
-      - name: Stage the artefacts
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/out"
+          out="$RUNNER_TEMP/install"
           mkdir -p "$out"
-          cd hybris
-          find . \( -name '*.so' -o -name '*.so.*' \) -type f | while read -r f; do
-            cp -av "$f" "$out/" || true
+          make -C hybris/common -j"$(nproc)" SUBDIRS=. libhybris-common.la
+          make -C hybris/common install-libLTLIBRARIES DESTDIR="$out"
+          make -C hybris/common/q -j"$(nproc)"
+          make -C hybris/common/q install DESTDIR="$out"
+          for dir in include properties libsync platforms hardware ui gralloc egl glesv1 glesv2 hwc2 vulkan utils; do
+            make -C "hybris/$dir" -j"$(nproc)"
+            make -C "hybris/$dir" install DESTDIR="$out"
           done
-          ls -la "$out"
 
-      - name: Package
+      - name: Verify and package installed tree
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/out"
-          tar --zstd -cf "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst" .
-          sha256sum "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst"
+          out="$RUNNER_TEMP/install"
+          lib="$out/usr/lib/hybris"
+          for file in libhybris-common.so.1 libhybris-vulkan-icd.so.0 \
+              libVkLayer_hybris_compat.so libhybris/linker/q.so; do
+            test -f "$lib/$file"
+            readelf -h "$lib/$file" | grep 'Machine:.*AArch64'
+          done
+          readelf -d "$lib/libhybris-platformcommon.so.1" | grep 'libwayland-client.so.0'
+          nm -D "$lib/libhybris-vulkan-icd.so.0" | grep ' vk_icdGetInstanceProcAddr$'
+          mkdir -p "$out/build-info"
+          git rev-parse HEAD > "$out/build-info/source-revision.txt"
+          cp "$ANDROID_HEADERS/SOURCE_REVISION" "$out/build-info/android-headers.txt"
+          cp "$RUNNER_TEMP/vulkan-headers-revision.txt" "$out/build-info/"
+          cp hybris/config.log "$out/build-info/"
+          tar --zstd -cf "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst" -C "$out" .
+          sha256sum "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst" > "$RUNNER_TEMP/SHA256SUMS"
 
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: libhybris-glibc-aarch64
-          path: ${{ runner.temp }}/libhybris-glibc-aarch64.tar.zst
+          path: |
+            ${{ runner.temp }}/libhybris-glibc-aarch64.tar.zst
+            ${{ runner.temp }}/SHA256SUMS
+          if-no-files-found: error
           retention-days: 30
 
       - uses: actions/upload-artifact@v4
