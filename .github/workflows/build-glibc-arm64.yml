@@ -62,15 +62,26 @@ jobs:
             echo "ok: $project $*"
           }
 
+          # NOTE on <system/window.h>: it is NOT under system/core in modern
+          # AOSP -- it moved to frameworks/native (libs/nativewindow). Same for
+          # <android/hardware_buffer.h> (frameworks/native/libs/nativewindow
+          # via .../include/android). The AOSP projects are named by their
+          # top-level path, so frameworks/native is fetched as a whole and
+          # sparse-checked to the include dirs the build reads.
+
           fetch hardware/libhardware           include/hardware
           fetch hardware/libhardware_legacy    include/hardware_legacy
-          # Modern AOSP moved cutils out of system/core/include, but
-          # utils/extract-headers.sh still looks for it there.
           fetch system/core                    include libcutils/include libsystem/include
-          # platform/system/logging holds <log/log.h> in modern AOSP; optional.
-          fetch system/logging                 liblog/include 2>/dev/null || echo "system/logging not fetched"
+          fetch system/logging                 liblog/include
           fetch system/media                   audio/include/system
           fetch bionic                         libc/include libc/kernel
+          # frameworks/native carries system/window.h, android/hardware_buffer.h
+          # and ui/*.h; sparse to just the header trees.
+          fetch frameworks/native              libs/nativewindow/include \
+                                               libs/nativebase/include \
+                                               libs/ui/include \
+                                               libs/arect/include 2>/dev/null \
+            || echo "frameworks/native fetch failed (headers may be missing)"
 
           echo "---- what we have ----"
           # NOTE: no `find | head` here; pipefail turns the resulting SIGPIPE
@@ -139,6 +150,16 @@ jobs:
           done
           copy android        "$src/system/core/include/android" optional
           copy utils          "$src/system/core/include/utils" optional
+
+          # frameworks/native provides the rest of the public NDK surface
+          copy ui             "$src/frameworks/native/libs/ui/include/ui"          optional
+          copy android        "$src/frameworks/native/libs/nativewindow/include/android" optional
+          copy system         "$src/frameworks/native/libs/nativewindow/include/system"  optional
+          # arect.h / nativebase are pulled in by ui headers
+          for t in nativebase arect; do
+            d="$src/frameworks/native/libs/$t/include"
+            [ -d "$d" ] && { cp -r "$d"/. "$hdr"/; echo "ok  $t <- $d"; }
+          done
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
             copy hardware_legacy "$src/hardware/libhardware_legacy/include/hardware_legacy"
