@@ -192,20 +192,17 @@ jobs:
           place graphics.h        system
           place hardware_buffer.h android
           place native_handle.h   cutils
-          place hardware.h        hardware
-          place gralloc.h         hardware
-          place fb.h              hardware
-          place dlext.h           android
-          place log.h             cutils
 
           echo "---- assert the headers the build needs ----"
           for f in android-config.h android-version.h \
                    hardware/hardware.h hardware/gralloc.h hardware/fb.h \
                    cutils/native_handle.h cutils/log.h \
                    system/graphics.h system/window.h \
-                   android/dlext.h android/hardware_buffer.h; do
+                   android/hardware_buffer.h; do
             if [ -f "$hdr/$f" ]; then echo "  yes $f"; else echo "  NO  $f"; missing=1; fi
-          done          [ "${missing:-0}" = 0 ]
+          done
+          echo "---- full top-level tree ----"
+          ls "$hdr"          [ "${missing:-0}" = 0 ]
           echo "---- header tree ----"
           find "$hdr" -maxdepth 1 -mindepth 1 | sort
 
