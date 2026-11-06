@@ -168,16 +168,20 @@ jobs:
           copy ui             "$src/frameworks/native/libs/ui/include/ui"          optional
           copy android        "$src/frameworks/native/libs/nativewindow/include/android" optional
           copy system         "$src/frameworks/native/libs/nativewindow/include/system"  optional
-          # arect.h / nativebase are pulled in by ui headers; vndk/ comes from
-          # nativewindow too (<system/window.h> includes <vndk/hardware_buffer.h>)
+          # arect.h / nativebase are pulled in by ui headers.
+          # NOTE: frameworks/native's vndk/hardware_buffer.h is NOT copied: it
+          # defines AHardwareBuffer too, and collides with the
+          # android/hardware_buffer.h already placed above. system/window.h's
+          # `#include <vndk/hardware_buffer.h>` is satisfied by pointing that
+          # name at the android/ copy instead.
           for t in nativebase arect; do
             d="$src/frameworks/native/libs/$t/include"
             [ -d "$d" ] && { cp -rL "$d"/. "$hdr"/; echo "ok  $t <- $d"; }
           done
-          if [ -d "$src/frameworks/native/libs/nativewindow/include/vndk" ]; then
+          if [ -f "$hdr/android/hardware_buffer.h" ]; then
             mkdir -p "$hdr/vndk"
-            cp -rL "$src/frameworks/native/libs/nativewindow/include/vndk"/. "$hdr/vndk"/
-            echo "ok  vndk/*.h ($(ls "$hdr/vndk" | wc -l))"
+            cp "$hdr/android/hardware_buffer.h" "$hdr/vndk/hardware_buffer.h"
+            echo "ok  vndk/hardware_buffer.h (from android/)"
           fi
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
