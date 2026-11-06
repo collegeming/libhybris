@@ -227,20 +227,28 @@ jobs:
           place graphics.h        system
           place hardware_buffer.h android
           place native_handle.h   cutils
-          # apex/window.h: newer <system/window.h> includes it; lives under
-          # frameworks/native/libs/nativewindow/include/apex
-          if [ -d "$src/frameworks/native/libs/nativewindow/include/apex" ]; then
-            mkdir -p "$hdr/apex"
-            cp -rL "$src/frameworks/native/libs/nativewindow/include/apex"/. "$hdr/apex"/
-            echo "ok  apex/*.h ($(ls "$hdr/apex" | wc -l))"
-          else
-            f=$(find "$src" -type f -path '*/apex/window.h' 2>/dev/null | sed -n '1p')
-            if [ -n "$f" ]; then
-              mkdir -p "$hdr/apex"; cp "$f" "$hdr/apex/window.h"; echo "placed apex/window.h"
+          # <system/window.h> in AOSP 17 chains into apex/ and vndk/; copy both
+          # header dirs and also drop the flat <vndk/window.h>.
+          for d in apex vndk; do
+            if [ -d "$src/frameworks/native/libs/nativewindow/include/$d" ]; then
+              mkdir -p "$hdr/$d"
+              cp -rL "$src/frameworks/native/libs/nativewindow/include/$d"/. "$hdr/$d"/
+              echo "ok  $d/*.h ($(ls "$hdr/$d" | wc -l))"
             else
-              echo "MISSING apex/window.h"
+              echo "MISSING dir $d"
             fi
-          fi
+          done
+          # any header the chain still asks for, found by name
+          for want in window.h; do
+            for d in apex vndk; do
+              if [ ! -f "$hdr/$d/$want" ]; then
+                f=$(find "$src" -type f -path "*/$d/$want" 2>/dev/null | sed -n '1p')
+                if [ -n "$f" ]; then
+                  mkdir -p "$hdr/$d"; cp "$f" "$hdr/$d/$want"; echo "placed $d/$want"
+                fi
+              fi
+            done
+          done
 
           echo "---- assert the headers the build needs ----"
           echo "hdr=$hdr"
