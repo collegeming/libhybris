@@ -89,11 +89,15 @@ jobs:
           for pair in "cutils:libcutils" "log:liblog"; do
             hdr=${pair%%:*}; src=${pair##*:}
             if [ -d "$root/system/core/$src/include/$hdr" ] && [ ! -e "$inc/$hdr" ]; then
-              ln -s "../../$src/include/$hdr" "$inc/$hdr"
-              echo "linked $hdr -> $src/include/$hdr"
+              # copy, not symlink: the hole-picking step below copies with -r,
+              # which would otherwise reproduce the link and break it
+              cp -r "$root/system/core/$src/include/$hdr" "$inc/$hdr"
+              echo "copied $hdr from $src/include/$hdr"
             fi
           done
           ls -la "$inc"
+          echo "---- sanity: is native_handle.h there? ----"
+          ls "$inc/cutils/native_handle.h"
 
       - name: Build the extract-headers input tree
         run: |
