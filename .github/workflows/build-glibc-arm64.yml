@@ -69,7 +69,11 @@ jobs:
           fetch bionic                         libc/include libc/kernel
 
           echo "---- what we have ----"
-          find "$root" -name '*.h' | head -20
+          # NOTE: no `find | head` here; pipefail turns the resulting SIGPIPE
+          # into a failed step.
+          find "$root" -name '*.h' > /tmp/hdr.txt
+          echo "header files fetched: $(wc -l < /tmp/hdr.txt)"
+          sed -n '1,15p' /tmp/hdr.txt
 
       - name: Build the extract-headers input tree
         run: |
@@ -88,7 +92,8 @@ jobs:
           cp -r "$RUNNER_TEMP/aosp/bionic/libc/kernel/common"     "$aosp/bionic/libc/kernel/" 2>/dev/null || true
 
           echo "---- aosp root ----"
-          find "$aosp" -maxdepth 4 -type d | head -20
+          find "$aosp" -maxdepth 4 -type d > /tmp/aospdirs.txt
+          sed -n '1,20p' /tmp/aospdirs.txt
 
       - name: Extract headers with the upstream script
         run: |
@@ -124,7 +129,8 @@ jobs:
             --enable-wayland \
             --enable-arch=arm64
           echo "---- configured ----"
-          grep -E 'ANDROID_HEADERS|wayland|arch' config.log | tail -20 || true
+          grep -E 'ANDROID_HEADERS|wayland|arch' config.log > /tmp/cfg.txt 2>/dev/null || true
+          sed -n '1,20p' /tmp/cfg.txt
 
       - name: Build
         run: |
