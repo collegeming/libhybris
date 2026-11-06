@@ -1,0 +1,173 @@
+name: Build libhybris (glibc aarch64) for XRing O3
+
+# Self-contained build of taowen/libhybris for a glibc aarch64 guest.
+#
+# Upstream's `ARLinux component` workflow needs a pinned request object from
+# build.ps1 plus the whole arlinux-rootfs framework. This one builds the same
+# libraries directly so the .so files can be dropped into the Droidspaces Arch
+# container and tested on the device.
+#
+# Android headers: the AOSP `manifest` repository holds only manifest XML, not
+# source. Each project lives in its own git repository, so the four needed ones
+# are cloned directly with a partial/blobless clone and sparse checkout.
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_tag:
+        description: AOSP tag/branch for the header projects
+        required: false
+        default: android17-release
+      android_version:
+        description: Version written into android-version.h (MAJOR.MINOR.PATCH)
+        required: false
+        default: '17.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # glibc aarch64 target, built natively on an arm64 runner.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      ANDROID_TAG: ${{ inputs.android_tag }}
+      ANDROID_VERSION: ${{ inputs.android_version }}
+    steps:
+      - name: Checkout this fork
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config \
+            libwayland-dev wayland-protocols libx11-dev libxcb1-dev libx11-xcb-dev \
+            python3 git zstd
+
+      - name: Fetch the Android headers
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/aosp"
+          mkdir -p "$root"
+
+          fetch() {  # fetch <project> <path-in-repo>
+            project=$1; sub=$2
+            dir="$root/$project"
+            git clone -q --depth 1 --filter=blob:none --sparse \
+              -b "$ANDROID_TAG" \
+              "https://android.googlesource.com/platform/$project" "$dir"
+            ( cd "$dir" && git sparse-checkout set "$sub" )
+            echo "ok: $project/$sub"
+          }
+
+          fetch hardware/libhardware           include/hardware
+          fetch hardware/libhardware_legacy    include/hardware_legacy
+          fetch system/core                    include
+          fetch system/media                   audio/include/system
+          fetch bionic                         libc/include libc/kernel
+
+          echo "---- what we have ----"
+          find "$root" -name '*.h' | head -20
+
+      - name: Build the extract-headers input tree
+        run: |
+          set -euo pipefail
+          # utils/extract-headers.sh expects an AOSP root with the same relative
+          # layout (hardware/libhardware/include/hardware, system/core/include/...).
+          aosp="$RUNNER_TEMP/aosp-root"
+          mkdir -p "$aosp/hardware" "$aosp/system/core" "$aosp/system/media" "$aosp/bionic/libc"
+          cp -r "$RUNNER_TEMP/aosp/hardware/libhardware"          "$aosp/hardware/"
+          cp -r "$RUNNER_TEMP/aosp/hardware/libhardware_legacy"   "$aosp/hardware/"
+          cp -r "$RUNNER_TEMP/aosp/system/core/include"           "$aosp/system/core/"
+          mkdir -p "$aosp/system/media"
+          cp -r "$RUNNER_TEMP/aosp/system/media/audio"            "$aosp/system/media/"
+          cp -r "$RUNNER_TEMP/aosp/bionic/libc/include"           "$aosp/bionic/libc/"
+          mkdir -p "$aosp/bionic/libc/kernel"
+          cp -r "$RUNNER_TEMP/aosp/bionic/libc/kernel/common"     "$aosp/bionic/libc/kernel/" 2>/dev/null || true
+
+          echo "---- aosp root ----"
+          find "$aosp" -maxdepth 4 -type d | head -20
+
+      - name: Extract headers with the upstream script
+        run: |
+          set -euo pipefail
+          sh utils/extract-headers.sh \
+             -v "$ANDROID_VERSION" \
+             "$RUNNER_TEMP/aosp-root" \
+             "$RUNNER_TEMP/android-headers"
+          echo "---- header tree ----"
+          ls "$RUNNER_TEMP/android-headers"
+
+      - name: Install arlinux-wsi-protocols (in tree)
+        run: |
+          set -euo pipefail
+          # configure asks for arlinux-wsi-protocols >= 0.3 when Wayland is on.
+          wsi="$RUNNER_TEMP/wsi"
+          mkdir -p "$wsi/lib/pkgconfig"
+          cp -r arlinux/graphics-protocols "$wsi/share"
+          sed "s|^pkgdatadir=.*|pkgdatadir=$wsi/share|" \
+              arlinux/graphics-protocols/arlinux-wsi-protocols.pc \
+              > "$wsi/lib/pkgconfig/arlinux-wsi-protocols.pc"
+          cat "$wsi/lib/pkgconfig/arlinux-wsi-protocols.pc"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          cd hybris
+          ./autogen.sh
+          ./configure \
+            --prefix=/usr \
+            --with-android-headers="$RUNNER_TEMP/android-headers" \
+            --enable-wayland \
+            --enable-arch=arm64
+          echo "---- configured ----"
+          grep -E 'ANDROID_HEADERS|wayland|arch' config.log | tail -20 || true
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          cd hybris
+          make -j"$(nproc)"
+
+      - name: List built objects
+        run: |
+          set -euo pipefail
+          cd hybris
+          find . -name '*.so' -o -name '*.so.*' | sort
+
+      - name: Stage the artefacts
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          cd hybris
+          find . \( -name '*.so' -o -name '*.so.*' \) -type f | while read -r f; do
+            cp -av "$f" "$out/" || true
+          done
+          ls -la "$out"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/out"
+          tar --zstd -cf "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst" .
+          sha256sum "$RUNNER_TEMP/libhybris-glibc-aarch64.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhybris-glibc-aarch64
+          path: ${{ runner.temp }}/libhybris-glibc-aarch64.tar.zst
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: |
+            hybris/config.log
+            hybris/**/*.log
+          retention-days: 7
