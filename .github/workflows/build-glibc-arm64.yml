@@ -279,7 +279,7 @@ jobs:
 
       - name: Configure
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # mali_quirks.c returns NULL in the branch compiled when MALI_QUIRKS is
           # off, but only pulls in <stdint.h>/<stdlib.h> inside the #if block;
           # newer glibc no longer provides NULL transitively. Patch that one
@@ -289,11 +289,26 @@ jobs:
           if grep -q 'include <stddef.h>' "$f"; then
             echo "already patched"
           else
-            # insert right after the SPDX line, before any #if
             sed -i '1a #include <stddef.h>' "$f"
             echo "patched $f"
           fi
-          sed -n '1,8p' "$f"
+
+          # AOSP's public headers use Clang's nullability qualifiers
+          # (_Nullable / _Nonnull), which GCC does not implement. They are
+          # annotations only, so make GCC expand them away.
+          cat > "$RUNNER_TEMP/nullability.h" <<'EOF'
+          #ifndef HYBRIS_NULLABILITY_SHIM_H
+          #define HYBRIS_NULLABILITY_SHIM_H
+          #ifndef __clang__
+          #define _Nullable
+          #define _Nonnull
+          #define _Null_unspecified
+          #endif
+          #endif
+          EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/nullability.h"
+          export CPPFLAGS="-include $RUNNER_TEMP/nullability.h ${CPPFLAGS:-}"
+          echo "CPPFLAGS=$CPPFLAGS"
 
           export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cd hybris
