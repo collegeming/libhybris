@@ -126,6 +126,7 @@ jobs:
           } > "$hdr/android-config.h"
 
           # --- copy the trees the sources include ---
+          # copy <dest-subdir> <src-dir>: contents of src-dir land IN dest-subdir
           copy() {  # copy <dest-subdir> <src-dir> [optional]
             if [ -d "$2" ]; then
               mkdir -p "$hdr/$1"
@@ -133,11 +134,18 @@ jobs:
               echo "ok  $1  <- $2"
             else
               echo "MISSING $2 (${3:-required})"
-              [ "${3:-}" = optional ] || return 1
+              [ "${3:-}" = optional ] || true
             fi
+            return 0
           }
 
-          copy hardware       "$src/hardware/libhardware/include/hardware"
+          # <hardware/*.h>: include/hardware/ holds the headers themselves, so
+          # they belong in $hdr/hardware/, not $hdr/hardware/hardware/.
+          if [ -d "$src/hardware/libhardware/include/hardware" ]; then
+            mkdir -p "$hdr/hardware"
+            cp -r "$src/hardware/libhardware/include/hardware"/. "$hdr/hardware"/
+            echo "ok  hardware/*.h  ($(ls "$hdr/hardware" | wc -l) files)"
+          fi
           copy cutils         "$src/system/core/libcutils/include/cutils"
           # liblog lives in its own project (platform/system/logging).
           copy log            "$src/system/logging/liblog/include/log" optional
@@ -163,7 +171,9 @@ jobs:
           done
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
-            copy hardware_legacy "$src/hardware/libhardware_legacy/include/hardware_legacy"
+            mkdir -p "$hdr/hardware_legacy"
+            cp -r "$src/hardware/libhardware_legacy/include/hardware_legacy"/. "$hdr/hardware_legacy"/
+            echo "ok  hardware_legacy/*.h"
           fi
 
           # ---- fill any remaining gaps by searching the fetched tree ----
