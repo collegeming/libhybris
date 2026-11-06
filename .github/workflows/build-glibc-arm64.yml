@@ -204,6 +204,10 @@ jobs:
           place native_handle.h   cutils
 
           echo "---- assert the headers the build needs ----"
+          echo "hdr=$hdr"
+          ls -d "$hdr"/*/ 2>/dev/null | sed -n '1,20p'
+          echo "-- direct probe --"
+          ls -l "$hdr/hardware/hardware.h" 2>&1 | sed -n '1,2p'
           missing=0
           for f in android-config.h android-version.h \
                    hardware/hardware.h hardware/gralloc.h hardware/fb.h \
