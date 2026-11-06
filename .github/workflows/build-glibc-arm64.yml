@@ -66,7 +66,7 @@ jobs:
           fetch hardware/libhardware_legacy    include/hardware_legacy
           # Modern AOSP moved cutils out of system/core/include, but
           # utils/extract-headers.sh still looks for it there.
-          fetch system/core                    include libcutils/include
+          fetch system/core                    include libcutils/include libsystem/include
           # platform/system/logging holds <log/log.h> in modern AOSP; optional.
           fetch system/logging                 liblog/include 2>/dev/null || echo "system/logging not fetched"
           fetch system/media                   audio/include/system
@@ -127,11 +127,17 @@ jobs:
 
           copy hardware       "$src/hardware/libhardware/include/hardware"
           copy cutils         "$src/system/core/libcutils/include/cutils"
-          # liblog lives in its own project (platform/system/logging) in modern
-          # AOSP; treat it as optional and fall back to cutils/log.h below.
+          # liblog lives in its own project (platform/system/logging).
           copy log            "$src/system/logging/liblog/include/log" optional
-          copy system         "$src/system/core/include/system"
-          copy android        "$src/system/core/include/android"
+          # <system/*.h> (graphics.h, window.h) moved around between releases;
+          # try the known spots and let the assertion below be the judge.
+          for cand in \
+              "$src/system/core/include/system" \
+              "$src/system/core/libsystem/include/system" \
+              "$src/system/core/libcutils/include/system"; do
+            if [ -d "$cand" ]; then copy system "$cand"; break; fi
+          done
+          copy android        "$src/system/core/include/android" optional
           copy utils          "$src/system/core/include/utils" optional
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
