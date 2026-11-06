@@ -227,6 +227,20 @@ jobs:
           place graphics.h        system
           place hardware_buffer.h android
           place native_handle.h   cutils
+          # apex/window.h: newer <system/window.h> includes it; lives under
+          # frameworks/native/libs/nativewindow/include/apex
+          if [ -d "$src/frameworks/native/libs/nativewindow/include/apex" ]; then
+            mkdir -p "$hdr/apex"
+            cp -rL "$src/frameworks/native/libs/nativewindow/include/apex"/. "$hdr/apex"/
+            echo "ok  apex/*.h ($(ls "$hdr/apex" | wc -l))"
+          else
+            f=$(find "$src" -type f -path '*/apex/window.h' 2>/dev/null | sed -n '1p')
+            if [ -n "$f" ]; then
+              mkdir -p "$hdr/apex"; cp "$f" "$hdr/apex/window.h"; echo "placed apex/window.h"
+            else
+              echo "MISSING apex/window.h"
+            fi
+          fi
 
           echo "---- assert the headers the build needs ----"
           echo "hdr=$hdr"
