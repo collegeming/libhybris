@@ -120,17 +120,12 @@ jobs:
       - name: Configure
         run: |
           set -euo pipefail
-          # mali_quirks.c uses NULL without <stddef.h>; newer glibc no longer
-          # pulls it in transitively. Applied at the repo root (the file lives
-          # under hybris/common/).
-          f=hybris/common/mali_quirks.c
-          if grep -q '<stddef.h>' "$f"; then
-            echo "already patched"
-          else
-            sed -i 's|#include <stdint.h>|#include <stddef.h>\n#include <stdint.h>|' "$f"
-            echo "patched stddef.h into $f"
-          fi
-          sed -n '1,20p' "$f"
+          # mali_quirks.c returns NULL in a branch compiled when MALI_QUIRKS is
+          # off, but only includes <stdint.h>/<stdlib.h> inside the #if block;
+          # newer glibc no longer gives NULL transitively. Force the header in
+          # through the compiler instead of editing the source.
+          export CPPFLAGS="-include stddef.h ${CPPFLAGS:-}"
+          echo "CPPFLAGS=$CPPFLAGS"
 
           export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cd hybris
