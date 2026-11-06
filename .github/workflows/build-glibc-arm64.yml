@@ -77,52 +77,77 @@ jobs:
           echo "header files fetched: $(wc -l < /tmp/hdr.txt)"
           ls "$root/system/core/libcutils/include/" 2>/dev/null || true
 
-      - name: Normalise the AOSP layout for extract-headers.sh
+      - name: Build the android-headers tree directly
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/aosp"
-          # extract-headers.sh expects system/core/include/cutils and
-          # .../include/log. AOSP keeps them under libcutils/include and
-          # liblog/include now, so link them into the expected place.
-          inc="$root/system/core/include"
-          mkdir -p "$inc"
-          for pair in "cutils:libcutils" "log:liblog"; do
-            hdr=${pair%%:*}; src=${pair##*:}
-            if [ -d "$root/system/core/$src/include/$hdr" ] && [ ! -e "$inc/$hdr" ]; then
-              # copy, not symlink: the hole-picking step below copies with -r,
-              # which would otherwise reproduce the link and break it
-              cp -r "$root/system/core/$src/include/$hdr" "$inc/$hdr"
-              echo "copied $hdr from $src/include/$hdr"
+          # utils/extract-headers.sh copies with `cp -L`, which keeps going
+          # after a miss, so a wrong source layout produces a silently empty
+          # tree. Build the include tree here instead, from the fetched
+          # projects, and assert on the headers the build actually needs.
+          src="$RUNNER_TEMP/aosp"
+          hdr="$RUNNER_TEMP/android-headers"
+          mkdir -p "$hdr"
+
+          # --- the two generated headers extract-headers.sh would create ---
+          v=${ANDROID_VERSION%%.*}
+          rest=${ANDROID_VERSION#*.}
+          mi=${rest%%.*}
+          pa=${rest#*.}
+          {
+            echo '#ifndef ANDROID_VERSION_H_'
+            echo '#define ANDROID_VERSION_H_'
+            echo "#define ANDROID_VERSION_MAJOR $v"
+            echo "#define ANDROID_VERSION_MINOR $mi"
+            echo "#define ANDROID_VERSION_PATCH $pa"
+            echo '#define ANDROID_VERSION_PATCH2 0'
+            echo '#define ANDROID_VERSION_PATCH3 0'
+            echo '#endif'
+          } > "$hdr/android-version.h"
+          {
+            echo '#ifndef HYBRIS_CONFIG_H_'
+            echo '#define HYBRIS_CONFIG_H_'
+            echo '#include <android-version.h>'
+            echo '/* CONFIG GOES HERE */'
+            echo '#endif'
+          } > "$hdr/android-config.h"
+
+          # --- copy the trees the sources include ---
+          copy() {  # copy <dest-subdir> <src-dir>
+            if [ -d "$2" ]; then
+              mkdir -p "$hdr/$1"
+              cp -r "$2"/. "$hdr/$1"/
+              echo "ok  $1  <- $2"
+            else
+              echo "MISSING $2"
+              return 1
             fi
+          }
+
+          copy hardware       "$src/hardware/libhardware/include/hardware"
+          copy cutils         "$src/system/core/libcutils/include/cutils"
+          copy log            "$src/system/core/include/log"
+          copy system         "$src/system/core/include/system"
+          copy android        "$src/system/core/include/android"
+          copy utils          "$src/system/core/include/utils"
+          # hardware_legacy/vibrator.h is optional for the graphics path
+          if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
+            copy hardware_legacy "$src/hardware/libhardware_legacy/include/hardware_legacy"
+          fi
+
+          echo "---- assert the headers the build needs ----"
+          for f in android-config.h android-version.h \
+                   hardware/hardware.h hardware/gralloc.h hardware/fb.h \
+                   cutils/native_handle.h cutils/log.h \
+                   system/graphics.h system/window.h \
+                   android/dlext.h android/hardware_buffer.h; do
+            if [ -f "$hdr/$f" ]; then echo "  yes $f"; else echo "  NO  $f"; missing=1; fi
           done
-          ls -la "$inc"
-          echo "---- sanity: is native_handle.h there? ----"
-          ls "$inc/cutils/native_handle.h"
-
-      - name: Build the extract-headers input tree
-        run: |
-          set -euo pipefail
-          # utils/extract-headers.sh expects an AOSP root with the same relative
-          # layout (hardware/libhardware/include/hardware, system/core/include/...).
-          aosp="$RUNNER_TEMP/aosp-root"
-          mkdir -p "$aosp/hardware" "$aosp/system/core" "$aosp/system/media" "$aosp/bionic/libc"
-          cp -r "$RUNNER_TEMP/aosp/hardware/libhardware"          "$aosp/hardware/"
-          cp -r "$RUNNER_TEMP/aosp/hardware/libhardware_legacy"   "$aosp/hardware/"
-          cp -r "$RUNNER_TEMP/aosp/system/core/include"           "$aosp/system/core/"
-          # the two moved header trees, now linked under include/
-          cp -rL "$RUNNER_TEMP/aosp/system/core/include/cutils"    "$aosp/system/core/include/" 2>/dev/null || true
-          cp -rL "$RUNNER_TEMP/aosp/system/core/include/log"       "$aosp/system/core/include/" 2>/dev/null || true
-          mkdir -p "$aosp/system/media"
-          cp -r "$RUNNER_TEMP/aosp/system/media/audio"            "$aosp/system/media/"
-          cp -r "$RUNNER_TEMP/aosp/bionic/libc/include"           "$aosp/bionic/libc/"
-          mkdir -p "$aosp/bionic/libc/kernel"
-          cp -r "$RUNNER_TEMP/aosp/bionic/libc/kernel/common"     "$aosp/bionic/libc/kernel/" 2>/dev/null || true
-
-          echo "---- aosp root ----"
-          find "$aosp" -maxdepth 4 -type d > /tmp/aospdirs.txt
-          sed -n '1,20p' /tmp/aospdirs.txt
+          [ "${missing:-0}" = 0 ]
+          echo "---- header tree ----"
+          find "$hdr" -maxdepth 1 -mindepth 1 | sort
 
       - name: Extract headers with the upstream script
+        if: false   # replaced by the step above
         run: |
           set -euo pipefail
           sh utils/extract-headers.sh \
