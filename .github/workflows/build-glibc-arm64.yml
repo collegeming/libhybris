@@ -33,12 +33,16 @@ jobs:
           git clone --depth 1 --branch vulkan-sdk-1.4.328.1 \
             https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
           git -C "$RUNNER_TEMP/vulkan-headers" rev-parse HEAD > "$RUNNER_TEMP/vulkan-headers-revision.txt"
+          git clone --depth 1 --branch 1.24.0 --filter=blob:none --sparse \
+            https://github.com/wayland-mirror/wayland.git "$RUNNER_TEMP/wayland-headers"
+          git -C "$RUNNER_TEMP/wayland-headers" sparse-checkout set egl
+          test -f "$RUNNER_TEMP/wayland-headers/egl/wayland-egl-backend.h"
 
       - name: Configure upstream graphics components
         run: |
           set -euo pipefail
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/arlinux/graphics-protocols"
-          export CPPFLAGS="-I$RUNNER_TEMP/vulkan-headers/include"
+          export CPPFLAGS="-I$RUNNER_TEMP/vulkan-headers/include -I$RUNNER_TEMP/wayland-headers/egl"
           export LDFLAGS="-Wl,--no-as-needed"
           cd hybris
           NOCONFIGURE=1 ./autogen.sh
