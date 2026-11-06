@@ -168,11 +168,17 @@ jobs:
           copy ui             "$src/frameworks/native/libs/ui/include/ui"          optional
           copy android        "$src/frameworks/native/libs/nativewindow/include/android" optional
           copy system         "$src/frameworks/native/libs/nativewindow/include/system"  optional
-          # arect.h / nativebase are pulled in by ui headers
+          # arect.h / nativebase are pulled in by ui headers; vndk/ comes from
+          # nativewindow too (<system/window.h> includes <vndk/hardware_buffer.h>)
           for t in nativebase arect; do
             d="$src/frameworks/native/libs/$t/include"
-            [ -d "$d" ] && { cp -r "$d"/. "$hdr"/; echo "ok  $t <- $d"; }
+            [ -d "$d" ] && { cp -rL "$d"/. "$hdr"/; echo "ok  $t <- $d"; }
           done
+          if [ -d "$src/frameworks/native/libs/nativewindow/include/vndk" ]; then
+            mkdir -p "$hdr/vndk"
+            cp -rL "$src/frameworks/native/libs/nativewindow/include/vndk"/. "$hdr/vndk"/
+            echo "ok  vndk/*.h ($(ls "$hdr/vndk" | wc -l))"
+          fi
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
             mkdir -p "$hdr/hardware_legacy"
