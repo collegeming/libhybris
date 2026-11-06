@@ -227,9 +227,6 @@ jobs:
           done < /tmp/incdirs.txt
           echo "ok  bulk include sweep ($(ls "$hdr" | wc -l) top-level entries)"
 
-          # re-assert the generated pair survived the sweep
-          [ -f "$hdr/android-config.h" ]  || echo "LOST android-config.h"
-          [ -f "$hdr/android-version.h" ] || echo "LOST android-version.h"
           # Rather than hard-coding where each header lives in this AOSP
           # release (it moves between releases), look each one up and place it
           # at the path the source expects.
@@ -283,6 +280,28 @@ jobs:
           ls -d "$hdr"/*/ 2>/dev/null | sed -n '1,20p'
           echo "-- direct probe --"
           ls -l "$hdr/hardware/hardware.h" 2>&1 | sed -n '1,2p'
+          # ---- regenerate the two synthetic headers last ----
+          # The bulk sweep above can overwrite them from an AOSP copy that is
+          # not meant to be used as android-config.h.
+          {
+            echo '#ifndef ANDROID_VERSION_H_'
+            echo '#define ANDROID_VERSION_H_'
+            echo "#define ANDROID_VERSION_MAJOR $v"
+            echo "#define ANDROID_VERSION_MINOR $mi"
+            echo "#define ANDROID_VERSION_PATCH $pa"
+            echo '#define ANDROID_VERSION_PATCH2 0'
+            echo '#define ANDROID_VERSION_PATCH3 0'
+            echo '#endif'
+          } > "$hdr/android-version.h"
+          {
+            echo '#ifndef HYBRIS_CONFIG_H_'
+            echo '#define HYBRIS_CONFIG_H_'
+            echo '#include <android-version.h>'
+            echo '/* CONFIG GOES HERE */'
+            echo '#endif'
+          } > "$hdr/android-config.h"
+          echo "regenerated android-version.h / android-config.h"
+
           missing=0
           for f in android-config.h android-version.h \
                    hardware/hardware.h hardware/gralloc.h hardware/fb.h \
