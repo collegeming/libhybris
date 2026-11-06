@@ -121,11 +121,16 @@ jobs:
         run: |
           set -euo pipefail
           # mali_quirks.c uses NULL without <stddef.h>; newer glibc no longer
-          # pulls it in transitively. One-line fix, kept here so the upstream
-          # tree stays untouched.
-          grep -q '<stddef.h>' hybris/common/mali_quirks.c || \
-            sed -i 's|#include <stdint.h>|#include <stddef.h>\n#include <stdint.h>|' hybris/common/mali_quirks.c
-          head -20 hybris/common/mali_quirks.c
+          # pulls it in transitively. Applied at the repo root (the file lives
+          # under hybris/common/).
+          f=hybris/common/mali_quirks.c
+          if grep -q '<stddef.h>' "$f"; then
+            echo "already patched"
+          else
+            sed -i 's|#include <stdint.h>|#include <stddef.h>\n#include <stdint.h>|' "$f"
+            echo "patched stddef.h into $f"
+          fi
+          sed -n '1,20p' "$f"
 
           export PKG_CONFIG_PATH="$RUNNER_TEMP/wsi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cd hybris
