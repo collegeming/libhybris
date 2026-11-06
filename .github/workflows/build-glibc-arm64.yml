@@ -166,6 +166,11 @@ jobs:
 
           # frameworks/native provides the rest of the public NDK surface
           copy ui             "$src/frameworks/native/libs/ui/include/ui"          optional
+          # android/ exists in two places; the nativewindow copy is the newer
+          # one (rect.h, data_space.h, hardware_buffer.h all live together).
+          # Copy system/core's first, then nativewindow's on top, so the set is
+          # consistent with the hardware_buffer.h that will be used.
+          copy android        "$src/system/core/include/android" optional
           copy android        "$src/frameworks/native/libs/nativewindow/include/android" optional
           copy system         "$src/frameworks/native/libs/nativewindow/include/system"  optional
           # arect.h / nativebase are pulled in by ui headers.
@@ -182,6 +187,12 @@ jobs:
             mkdir -p "$hdr/vndk"
             cp "$hdr/android/hardware_buffer.h" "$hdr/vndk/hardware_buffer.h"
             echo "ok  vndk/hardware_buffer.h (from android/)"
+            echo "-- deps of hardware_buffer.h --"
+            grep -n '#include' "$hdr/android/hardware_buffer.h" > /tmp/hbi.txt 2>/dev/null || true
+            sed -n '1,12p' /tmp/hbi.txt
+            for dep in android/rect.h android/data_space.h; do
+              [ -f "$hdr/$dep" ] && echo "  have $dep" || echo "  MISS $dep"
+            done
           fi
           # hardware_legacy/vibrator.h is optional for the graphics path
           if [ -d "$src/hardware/libhardware_legacy/include/hardware_legacy" ]; then
