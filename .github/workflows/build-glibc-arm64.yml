@@ -282,13 +282,19 @@ jobs:
           ls -l "$hdr/hardware/hardware.h" 2>&1 | sed -n '1,2p'
           # ---- regenerate the two synthetic headers last ----
           # The bulk sweep above can overwrite them from an AOSP copy that is
-          # not meant to be used as android-config.h.
+          # not meant to be used as android-config.h. Values are derived from
+          # ANDROID_VERSION again here so no stale shell variable is relied on.
+          av="${ANDROID_VERSION:-17.0.0}"
+          a1="${av%%.*}"
+          a23="${av#*.}"
+          a2="${a23%%.*}"
+          a3="${a23#*.}"
           {
             echo '#ifndef ANDROID_VERSION_H_'
             echo '#define ANDROID_VERSION_H_'
-            echo "#define ANDROID_VERSION_MAJOR $v"
-            echo "#define ANDROID_VERSION_MINOR $mi"
-            echo "#define ANDROID_VERSION_PATCH $pa"
+            echo "#define ANDROID_VERSION_MAJOR ${a1:-17}"
+            echo "#define ANDROID_VERSION_MINOR ${a2:-0}"
+            echo "#define ANDROID_VERSION_PATCH ${a3:-0}"
             echo '#define ANDROID_VERSION_PATCH2 0'
             echo '#define ANDROID_VERSION_PATCH3 0'
             echo '#endif'
@@ -300,7 +306,9 @@ jobs:
             echo '/* CONFIG GOES HERE */'
             echo '#endif'
           } > "$hdr/android-config.h"
-          echo "regenerated android-version.h / android-config.h"
+          echo "regenerated: $(ls -l "$hdr/android-config.h" | wc -l) file, head:"
+          sed -n '1,4p' "$hdr/android-config.h"
+          sed -n '1,5p' "$hdr/android-version.h"
 
           missing=0
           for f in android-config.h android-version.h \
