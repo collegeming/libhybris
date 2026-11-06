@@ -145,6 +145,9 @@ jobs:
             mkdir -p "$hdr/hardware"
             cp -r "$src/hardware/libhardware/include/hardware"/. "$hdr/hardware"/
             echo "ok  hardware/*.h  ($(ls "$hdr/hardware" | wc -l) files)"
+            echo "---- what is in hardware/ ----"
+            ls "$hdr/hardware" > /tmp/hw.txt
+            sed -n '1,45p' /tmp/hw.txt
           fi
           copy cutils         "$src/system/core/libcutils/include/cutils"
           # liblog lives in its own project (platform/system/logging).
